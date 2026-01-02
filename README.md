@@ -46,13 +46,22 @@ telemt config.toml
 
 ## How to use?
 ### Telemt via Systemd
+0. Check port and generate secrets
+The port you have selected for use should be MISSING from the list, when:
+```bash
+netstat -lnp
+```
+
+Generate 16 bytes/32 characters HEX with OpenSSL or another way:
+```bash
+openssl rand -hex 16
+```
 1. Place your config to /etc/telemt.toml
 ```bash
 port = 443                              # Listening port
 
 [users]
-# ! Generate YOUR OWN secret with "openssl rand -hex 16", replace it instead 00000000000000000000000000000000 !
-hello = "00000000000000000000000000000000"
+hello = "00000000000000000000000000000000" # Replace the secret with one generated before
 
 [modes]
 classic = false                         # Plain obfuscated mode
