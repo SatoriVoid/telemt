@@ -59,6 +59,12 @@ openssl rand -hex 16
 ```
 
 **1. Place your config to /etc/telemt.toml**
+
+Open nano
+```bash
+nano /etc/telemt.toml
+```
+then Ctrl+X -> Y -> Enter
 ```bash
 port = 443                              # Listening port
 
@@ -82,6 +88,12 @@ client_keepalive = 600                  # Seconds
 client_ack_timeout = 300                # Seconds
 ```
 **2. Create service on /etc/systemd/system/telemt.service**
+
+Open nano
+```bash
+nano /etc/systemd/system/telemt.service
+```
+paste this Systemd Module
 ```bash
 [Unit]
 Description=Telemt
@@ -96,6 +108,8 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 ```
+then Ctrl+X -> Y -> Enter to save
+
 **3.**  In Shell type `systemctl start telemt` - it must start with zero exit-code
 
 **4.** In Shell type `systemctl status telemt` - there you can reach info about current MTProxy status
