@@ -10,6 +10,7 @@
 - [Configuration](#configuration)
   - [Minimal Configuration](#minimal-configuration-for-first-start)
   - [Advanced](#advanced)
+    - [Adtag](#adtag)
     - [Listening and Announce IPs](#listening-and-announce-ips)
     - [Upstream Manager](#upstream-manager)
       - [IP](#bind-on-ip)
