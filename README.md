@@ -121,15 +121,6 @@ then Ctrl+X -> Y -> Enter to save
 port = 443                              # Listening port
 show_links = ["tele", "hello"]          # Specify users, for whom will be displayed the links
 
-[users]
-tele = "00000000000000000000000000000000" # Replace the secret with one generated before
-hello = "00000000000000000000000000000000" # Replace the secret with one generated before
-
-[modes]
-classic = false                         # Plain obfuscated mode
-secure = false                          # dd-prefix mode
-tls = true                              # Fake TLS - ee-prefix
-
 tls_domain = "petrovich.ru"             # Domain for ee-secret and masking
 mask = true                             # Enable masking of bad traffic
 mask_host = "petrovich.ru"              # Optional override for mask destination
@@ -140,6 +131,17 @@ fast_mode = true                        # Use "fast" obfuscation variant
 
 client_keepalive = 600                  # Seconds
 client_ack_timeout = 300                # Seconds
+
+show_link = [ "hello" ]
+
+[modes]
+classic = true                          # Plain obfuscated mode
+secure = true                           # dd-prefix mode
+tls = true                              # Fake TLS (ee-prefix)
+
+[users]
+hello = "00000000000000000000000000000000" # Replace the secret with one generated before
+tele = "00000000000000000000000000000000" # Replace the secret with one generated before
 ```
 ### Advanced
 #### Adtag
