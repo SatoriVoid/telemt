@@ -1,0 +1,4 @@
+name: "Rust without tests"
+
+queries:
+  - uses: security-and-quality
