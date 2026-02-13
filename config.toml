@@ -4,7 +4,7 @@ show_link = ["hello"]
 
 # === General Settings ===
 [general]
-prefer_ipv6 = false
+prefer_ipv6 = true
 fast_mode = true
 use_middle_proxy = true
 ad_tag = "00000000000000000000000000000000"
