@@ -3,6 +3,7 @@
 mod codec;
 mod health;
 mod pool;
+mod pool_nat;
 mod reader;
 mod registry;
 mod send;

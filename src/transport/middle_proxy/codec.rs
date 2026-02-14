@@ -59,7 +59,7 @@ pub(crate) fn build_nonce_payload(key_selector: u32, crypto_ts: u32, nonce: &[u8
     p
 }
 
-pub(crate) fn parse_nonce_payload(d: &[u8]) -> Result<(u32, u32, [u8; 16])> {
+pub(crate) fn parse_nonce_payload(d: &[u8]) -> Result<(u32, u32, u32, [u8; 16])> {
     if d.len() < 32 {
         return Err(ProxyError::InvalidHandshake(format!(
             "Nonce payload too short: {} bytes",
@@ -74,11 +74,12 @@ pub(crate) fn parse_nonce_payload(d: &[u8]) -> Result<(u32, u32, [u8; 16])> {
         )));
     }
 
+    let key_select = u32::from_le_bytes(d[4..8].try_into().unwrap());
     let schema = u32::from_le_bytes(d[8..12].try_into().unwrap());
     let ts = u32::from_le_bytes(d[12..16].try_into().unwrap());
     let mut nonce = [0u8; 16];
     nonce.copy_from_slice(&d[16..32]);
-    Ok((schema, ts, nonce))
+    Ok((key_select, schema, ts, nonce))
 }
 
 pub(crate) fn build_handshake_payload(
