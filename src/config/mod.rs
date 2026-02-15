@@ -54,6 +54,10 @@ fn default_metrics_whitelist() -> Vec<IpAddr> {
     vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()]
 }
 
+fn default_unknown_dc_log_path() -> Option<String> {
+    Some("unknown-dc.txt".to_string())
+}
+
 // ============= Custom Deserializers =============
 
 #[derive(Deserialize)]
@@ -242,6 +246,10 @@ pub struct GeneralConfig {
     #[serde(default)]
     pub stun_iface_mismatch_ignore: bool,
 
+    /// Log unknown (non-standard) DC requests to a file (default: unknown-dc.txt). Set to null to disable.
+    #[serde(default = "default_unknown_dc_log_path")]
+    pub unknown_dc_log_path: Option<String>,
+
     #[serde(default)]
     pub log_level: LogLevel,
 
@@ -263,6 +271,7 @@ impl Default for GeneralConfig {
             middle_proxy_nat_probe: false,
             middle_proxy_nat_stun: None,
             stun_iface_mismatch_ignore: false,
+            unknown_dc_log_path: default_unknown_dc_log_path(),
             log_level: LogLevel::Normal,
             disable_colors: false,
         }

@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -111,6 +113,16 @@ fn get_dc_addr_static(dc_idx: i16, config: &ProxyConfig) -> Result<SocketAddr> {
     let abs_dc = dc_idx.unsigned_abs() as usize;
     if abs_dc >= 1 && abs_dc <= num_dcs {
         return Ok(SocketAddr::new(datacenters[abs_dc - 1], TG_DATACENTER_PORT));
+    }
+
+    // Unknown DC requested by client without override: log and fall back.
+    if !config.dc_overrides.contains_key(&dc_key) {
+        warn!(dc_idx = dc_idx, "Requested non-standard DC with no override; falling back to default cluster");
+        if let Some(path) = &config.general.unknown_dc_log_path {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(file, "dc_idx={dc_idx}");
+            }
+        }
     }
 
     let default_dc = config.default_dc.unwrap_or(2) as usize;
