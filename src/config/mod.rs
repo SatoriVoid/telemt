@@ -4,8 +4,9 @@ use crate::error::{ProxyError, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::path::Path;
+use tracing::warn;
 
 // ============= Helper Defaults =============
 
@@ -615,6 +616,16 @@ impl ProxyConfig {
                 "Invalid tls_domain: '{}'. Must be a valid domain name",
                 self.censorship.tls_domain
             )));
+        }
+
+        if let Some(tag) = &self.general.ad_tag {
+            let zeros = "00000000000000000000000000000000";
+            if tag == zeros {
+                warn!("ad_tag is all zeros; register a valid proxy tag via @MTProxybot to enable sponsored channel");
+            }
+            if tag.len() != 32 || tag.chars().any(|c| !c.is_ascii_hexdigit()) {
+                warn!("ad_tag is not a 32-char hex string; ensure you use value issued by @MTProxybot");
+            }
         }
 
         Ok(())

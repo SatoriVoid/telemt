@@ -3,33 +3,42 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, info, warn};
+use rand::seq::SliceRandom;
 
 use crate::crypto::SecureRandom;
-use crate::protocol::constants::TG_MIDDLE_PROXIES_FLAT_V4;
 
 use super::MePool;
 
-pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, min_connections: usize) {
+pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_connections: usize) {
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        let current = pool.connection_count();
-        if current < min_connections {
-            warn!(
-                current,
-                min = min_connections,
-                "ME pool below minimum, reconnecting..."
-            );
-            let addrs = TG_MIDDLE_PROXIES_FLAT_V4.clone();
-            for &(ip, port) in addrs.iter() {
-                let needed = min_connections.saturating_sub(pool.connection_count());
-                if needed == 0 {
-                    break;
-                }
-                for _ in 0..needed {
-                    let addr = SocketAddr::new(ip, port);
+        // Per-DC coverage check
+        let map = pool.proxy_map_v4.read().await.clone();
+        let writer_addrs: std::collections::HashSet<SocketAddr> = pool
+            .writers
+            .read()
+            .await
+            .iter()
+            .map(|(a, _)| *a)
+            .collect();
+
+        for (dc, addrs) in map.iter() {
+            let dc_addrs: Vec<SocketAddr> = addrs
+                .iter()
+                .map(|(ip, port)| SocketAddr::new(*ip, *port))
+                .collect();
+            let has_coverage = dc_addrs.iter().any(|a| writer_addrs.contains(a));
+            if !has_coverage {
+                warn!(dc = %dc, "DC has no ME coverage, reconnecting...");
+                let mut shuffled = dc_addrs.clone();
+                shuffled.shuffle(&mut rand::rng());
+                for addr in shuffled {
                     match pool.connect_one(addr, &rng).await {
-                        Ok(()) => info!(%addr, "ME reconnected"),
-                        Err(e) => debug!(%addr, error = %e, "ME reconnect failed"),
+                        Ok(()) => {
+                            info!(%addr, dc = %dc, "ME reconnected for DC coverage");
+                            break;
+                        }
+                        Err(e) => debug!(%addr, dc = %dc, error = %e, "ME reconnect failed"),
                     }
                 }
             }

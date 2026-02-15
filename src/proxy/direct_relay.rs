@@ -139,6 +139,8 @@ async fn do_tg_handshake_static(
         success.dc_idx,
         &success.dec_key,
         success.dec_iv,
+        &success.enc_key,
+        success.enc_iv,
         rng,
         config.general.fast_mode,
     );

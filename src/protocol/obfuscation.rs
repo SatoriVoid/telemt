@@ -160,6 +160,12 @@ pub fn prepare_tg_nonce(
 }
 
 /// Encrypt the outgoing nonce for Telegram
+/// Legacy helper — **do not use**.
+/// WARNING: logic diverges from Python/C reference (SHA256 of 48 bytes, IV from head).
+/// Kept only to avoid breaking external callers; prefer `encrypt_tg_nonce_with_ciphers`.
+#[deprecated(
+    note = "Incorrect MTProto obfuscation KDF; use proxy::handshake::encrypt_tg_nonce_with_ciphers"
+)]
 pub fn encrypt_nonce(nonce: &[u8; HANDSHAKE_LEN]) -> Vec<u8> {
     let key_iv = &nonce[SKIP_LEN..SKIP_LEN + KEY_LEN + IV_LEN];
     let enc_key = sha256(key_iv);

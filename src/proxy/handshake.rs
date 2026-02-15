@@ -70,7 +70,7 @@ where
     let digest = &handshake[tls::TLS_DIGEST_POS..tls::TLS_DIGEST_POS + tls::TLS_DIGEST_LEN];
     let digest_half = &digest[..tls::TLS_DIGEST_HALF_LEN];
 
-    if replay_checker.check_tls_digest(digest_half) {
+    if replay_checker.check_and_add_tls_digest(digest_half) {
         warn!(peer = %peer, "TLS replay attack detected (duplicate digest)");
         return HandshakeResult::BadClient { reader, writer };
     }
@@ -122,8 +122,6 @@ where
         return HandshakeResult::Error(ProxyError::Io(e));
     }
 
-    replay_checker.add_tls_digest(digest_half);
-
     info!(
         peer = %peer,
         user = %validation.user,
@@ -155,7 +153,7 @@ where
 
     let dec_prekey_iv = &handshake[SKIP_LEN..SKIP_LEN + PREKEY_LEN + IV_LEN];
 
-    if replay_checker.check_handshake(dec_prekey_iv) {
+    if replay_checker.check_and_add_handshake(dec_prekey_iv) {
         warn!(peer = %peer, "MTProto replay attack detected");
         return HandshakeResult::BadClient { reader, writer };
     }
@@ -216,8 +214,6 @@ where
 
         let enc_iv = u128::from_be_bytes(enc_iv_bytes.try_into().unwrap());
 
-        replay_checker.add_handshake(dec_prekey_iv);
-
         let encryptor = AesCtr::new(&enc_key, enc_iv);
 
         let success = HandshakeSuccess {
@@ -256,8 +252,10 @@ where
 pub fn generate_tg_nonce(
     proto_tag: ProtoTag, 
     dc_idx: i16,
-    client_dec_key: &[u8; 32],
-    client_dec_iv: u128,
+    _client_dec_key: &[u8; 32],
+    _client_dec_iv: u128,
+    client_enc_key: &[u8; 32],
+    client_enc_iv: u128,
     rng: &SecureRandom,
     fast_mode: bool,
 ) -> ([u8; HANDSHAKE_LEN], [u8; 32], u128, [u8; 32], u128) {
@@ -278,9 +276,11 @@ pub fn generate_tg_nonce(
         nonce[DC_IDX_POS..DC_IDX_POS + 2].copy_from_slice(&dc_idx.to_le_bytes());
 
         if fast_mode {
-            nonce[SKIP_LEN..SKIP_LEN + KEY_LEN].copy_from_slice(client_dec_key);
-            nonce[SKIP_LEN + KEY_LEN..SKIP_LEN + KEY_LEN + IV_LEN]
-                .copy_from_slice(&client_dec_iv.to_be_bytes());
+            let mut key_iv = Vec::with_capacity(KEY_LEN + IV_LEN);
+            key_iv.extend_from_slice(client_enc_key);
+            key_iv.extend_from_slice(&client_enc_iv.to_be_bytes());
+            key_iv.reverse(); // Python/C behavior: reversed enc_key+enc_iv in nonce
+            nonce[SKIP_LEN..SKIP_LEN + KEY_LEN + IV_LEN].copy_from_slice(&key_iv);
         }
 
         let enc_key_iv = &nonce[SKIP_LEN..SKIP_LEN + KEY_LEN + IV_LEN];
@@ -332,10 +332,21 @@ mod tests {
     fn test_generate_tg_nonce() {
         let client_dec_key = [0x42u8; 32];
         let client_dec_iv = 12345u128;
+        let client_enc_key = [0x24u8; 32];
+        let client_enc_iv = 54321u128;
 
         let rng = SecureRandom::new();
         let (nonce, _tg_enc_key, _tg_enc_iv, _tg_dec_key, _tg_dec_iv) = 
-            generate_tg_nonce(ProtoTag::Secure, 2, &client_dec_key, client_dec_iv, &rng, false);
+            generate_tg_nonce(
+                ProtoTag::Secure,
+                2,
+                &client_dec_key,
+                client_dec_iv,
+                &client_enc_key,
+                client_enc_iv,
+                &rng,
+                false,
+            );
 
         assert_eq!(nonce.len(), HANDSHAKE_LEN);
 
@@ -347,10 +358,21 @@ mod tests {
     fn test_encrypt_tg_nonce() {
         let client_dec_key = [0x42u8; 32];
         let client_dec_iv = 12345u128;
+        let client_enc_key = [0x24u8; 32];
+        let client_enc_iv = 54321u128;
 
         let rng = SecureRandom::new();
         let (nonce, _, _, _, _) = 
-            generate_tg_nonce(ProtoTag::Secure, 2, &client_dec_key, client_dec_iv, &rng, false);
+            generate_tg_nonce(
+                ProtoTag::Secure,
+                2,
+                &client_dec_key,
+                client_dec_iv,
+                &client_enc_key,
+                client_enc_iv,
+                &rng,
+                false,
+            );
 
         let encrypted = encrypt_tg_nonce(&nonce);
 

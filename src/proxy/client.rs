@@ -339,6 +339,7 @@ impl RunningClientHandler {
                     config,
                     buffer_pool,
                     local_addr,
+                    rng,
                 )
                 .await;
             }

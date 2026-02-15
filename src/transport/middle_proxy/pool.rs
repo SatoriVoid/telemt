@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicI32, AtomicU64};
 use std::time::Duration;
 
 use bytes::BytesMut;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, RwLock};
@@ -32,11 +33,14 @@ pub struct MePool {
     pub(super) writers: Arc<RwLock<Vec<(SocketAddr, Arc<Mutex<RpcWriter>>)>>> ,
     pub(super) rr: AtomicU64,
     pub(super) proxy_tag: Option<Vec<u8>>,
-    proxy_secret: Vec<u8>,
+    pub(super) proxy_secret: Arc<RwLock<Vec<u8>>>,
     pub(super) nat_ip_cfg: Option<IpAddr>,
-    pub(super) nat_ip_detected: OnceLock<IpAddr>,
+    pub(super) nat_ip_detected: Arc<RwLock<Option<IpAddr>>>,
     pub(super) nat_probe: bool,
     pub(super) nat_stun: Option<String>,
+    pub(super) proxy_map_v4: Arc<RwLock<HashMap<i32, Vec<(IpAddr, u16)>>>>,
+    pub(super) proxy_map_v6: Arc<RwLock<HashMap<i32, Vec<(IpAddr, u16)>>>>,
+    pub(super) default_dc: AtomicI32,
     pool_size: usize,
 }
 
@@ -47,18 +51,24 @@ impl MePool {
         nat_ip: Option<IpAddr>,
         nat_probe: bool,
         nat_stun: Option<String>,
+        proxy_map_v4: HashMap<i32, Vec<(IpAddr, u16)>>,
+        proxy_map_v6: HashMap<i32, Vec<(IpAddr, u16)>>,
+        default_dc: Option<i32>,
     ) -> Arc<Self> {
         Arc::new(Self {
             registry: Arc::new(ConnRegistry::new()),
             writers: Arc::new(RwLock::new(Vec::new())),
             rr: AtomicU64::new(0),
             proxy_tag,
-            proxy_secret,
+            proxy_secret: Arc::new(RwLock::new(proxy_secret)),
             nat_ip_cfg: nat_ip,
-            nat_ip_detected: OnceLock::new(),
+            nat_ip_detected: Arc::new(RwLock::new(None)),
             nat_probe,
             nat_stun,
             pool_size: 2,
+            proxy_map_v4: Arc::new(RwLock::new(proxy_map_v4)),
+            proxy_map_v6: Arc::new(RwLock::new(proxy_map_v6)),
+            default_dc: AtomicI32::new(default_dc.unwrap_or(0)),
         })
     }
 
@@ -80,39 +90,129 @@ impl MePool {
         self.writers.clone()
     }
 
-    fn key_selector(&self) -> u32 {
-        if self.proxy_secret.len() >= 4 {
-            u32::from_le_bytes([
-                self.proxy_secret[0],
-                self.proxy_secret[1],
-                self.proxy_secret[2],
-                self.proxy_secret[3],
-            ])
+    pub async fn reconcile_connections(&self, rng: &SecureRandom) {
+        use std::collections::HashSet;
+        let map = self.proxy_map_v4.read().await.clone();
+        let writers = self.writers.read().await;
+        let current: HashSet<SocketAddr> = writers.iter().map(|(a, _)| *a).collect();
+        drop(writers);
+
+        for (_dc, addrs) in map.iter() {
+            let dc_addrs: Vec<SocketAddr> = addrs
+                .iter()
+                .map(|(ip, port)| SocketAddr::new(*ip, *port))
+                .collect();
+            if !dc_addrs.iter().any(|a| current.contains(a)) {
+                let mut shuffled = dc_addrs.clone();
+                shuffled.shuffle(&mut rand::rng());
+                for addr in shuffled {
+                    if self.connect_one(addr, rng).await.is_ok() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pub async fn update_proxy_maps(
+        &self,
+        new_v4: HashMap<i32, Vec<(IpAddr, u16)>>,
+        new_v6: Option<HashMap<i32, Vec<(IpAddr, u16)>>>,
+    ) -> bool {
+        let mut changed = false;
+        {
+            let mut guard = self.proxy_map_v4.write().await;
+            if !new_v4.is_empty() && *guard != new_v4 {
+                *guard = new_v4;
+                changed = true;
+            }
+        }
+        if let Some(v6) = new_v6 {
+            let mut guard = self.proxy_map_v6.write().await;
+            if !v6.is_empty() && *guard != v6 {
+                *guard = v6;
+            }
+        }
+        changed
+    }
+
+    pub async fn update_secret(&self, new_secret: Vec<u8>) -> bool {
+        if new_secret.len() < 32 {
+            warn!(len = new_secret.len(), "proxy-secret update ignored (too short)");
+            return false;
+        }
+        let mut guard = self.proxy_secret.write().await;
+        if *guard != new_secret {
+            *guard = new_secret;
+            drop(guard);
+            self.reconnect_all().await;
+            return true;
+        }
+        false
+    }
+
+    pub async fn reconnect_all(&self) {
+        // Graceful: do not drop all at once. New connections will use updated secret.
+        // Existing writers remain until health monitor replaces them.
+        // No-op here to avoid total outage.
+    }
+
+    async fn key_selector(&self) -> u32 {
+        let secret = self.proxy_secret.read().await;
+        if secret.len() >= 4 {
+            u32::from_le_bytes([secret[0], secret[1], secret[2], secret[3]])
         } else {
             0
         }
     }
 
     pub async fn init(self: &Arc<Self>, pool_size: usize, rng: &SecureRandom) -> Result<()> {
-        let addrs = &*TG_MIDDLE_PROXIES_FLAT_V4;
-        let ks = self.key_selector();
+        let map = self.proxy_map_v4.read().await;
+        let ks = self.key_selector().await;
         info!(
-            me_servers = addrs.len(),
+            me_servers = map.len(),
             pool_size,
             key_selector = format_args!("0x{ks:08x}"),
-            secret_len = self.proxy_secret.len(),
+            secret_len = self.proxy_secret.read().await.len(),
             "Initializing ME pool"
         );
 
-        for &(ip, port) in addrs.iter() {
-            for i in 0..pool_size {
+        // Ensure at least one connection per DC with failover over all addresses
+        for (dc, addrs) in map.iter() {
+            if addrs.is_empty() {
+                continue;
+            }
+            let mut connected = false;
+            let mut shuffled = addrs.clone();
+            shuffled.shuffle(&mut rand::rng());
+            for (ip, port) in shuffled {
                 let addr = SocketAddr::new(ip, port);
                 match self.connect_one(addr, rng).await {
-                    Ok(()) => info!(%addr, idx = i, "ME connected"),
-                    Err(e) => warn!(%addr, idx = i, error = %e, "ME connect failed"),
+                    Ok(()) => {
+                        info!(%addr, dc = %dc, "ME connected");
+                        connected = true;
+                        break;
+                    }
+                    Err(e) => warn!(%addr, dc = %dc, error = %e, "ME connect failed, trying next"),
                 }
             }
-            if self.writers.read().await.len() >= pool_size {
+            if !connected {
+                warn!(dc = %dc, "All ME servers for DC failed at init");
+            }
+        }
+
+        // Additional connections up to pool_size total (round-robin across DCs)
+        for (dc, addrs) in map.iter() {
+            for (ip, port) in addrs {
+                if self.connection_count() >= pool_size {
+                    break;
+                }
+                let addr = SocketAddr::new(*ip, *port);
+                if let Err(e) = self.connect_one(addr, rng).await {
+                    debug!(%addr, dc = %dc, error = %e, "Extra ME connect failed");
+                }
+            }
+            if self.connection_count() >= pool_size {
                 break;
             }
         }
@@ -124,11 +224,12 @@ impl MePool {
     }
 
     pub(crate) async fn connect_one(
-        self: &Arc<Self>,
+        &self,
         addr: SocketAddr,
         rng: &SecureRandom,
     ) -> Result<()> {
-        let secret = &self.proxy_secret;
+        let secret_guard = self.proxy_secret.read().await;
+        let secret: Vec<u8> = secret_guard.clone();
         if secret.len() < 32 {
             return Err(ProxyError::Proxy(
                 "proxy-secret too short for ME auth".into(),
@@ -165,7 +266,7 @@ impl MePool {
             .unwrap_or_default()
             .as_secs() as u32;
 
-        let ks = self.key_selector();
+        let ks = self.key_selector().await;
         let nonce_payload = build_nonce_payload(ks, crypto_ts, &my_nonce);
         let nonce_frame = build_rpc_frame(-2, &nonce_payload);
         let dump = hex_dump(&nonce_frame[..nonce_frame.len().min(44)]);
@@ -234,7 +335,10 @@ impl MePool {
 
         let (srv_ip_opt, clt_ip_opt, clt_v6_opt, srv_v6_opt, hs_our_ip, hs_peer_ip) =
             match (server_ip, client_ip) {
-                (IpMaterial::V4(srv), IpMaterial::V4(clt)) => {
+                // IPv4: reverse byte order for KDF (Python/C reference behavior)
+                (IpMaterial::V4(mut srv), IpMaterial::V4(mut clt)) => {
+                    srv.reverse();
+                    clt.reverse();
                     (Some(srv), Some(clt), None, None, clt, srv)
                 }
                 (IpMaterial::V6(srv), IpMaterial::V6(clt)) => {
@@ -263,7 +367,7 @@ impl MePool {
             b"CLIENT",
             clt_ip_opt.as_ref().map(|x| &x[..]),
             &server_port_bytes,
-            secret,
+            &secret,
             clt_v6_opt.as_ref(),
             srv_v6_opt.as_ref(),
         );
@@ -276,7 +380,7 @@ impl MePool {
             b"SERVER",
             clt_ip_opt.as_ref().map(|x| &x[..]),
             &server_port_bytes,
-            secret,
+            &secret,
             clt_v6_opt.as_ref(),
             srv_v6_opt.as_ref(),
         );
@@ -290,7 +394,7 @@ impl MePool {
             b"CLIENT",
             clt_ip_opt.as_ref().map(|x| &x[..]),
             &server_port_bytes,
-            secret,
+            &secret,
             clt_v6_opt.as_ref(),
             srv_v6_opt.as_ref(),
         );
@@ -303,7 +407,7 @@ impl MePool {
             b"SERVER",
             clt_ip_opt.as_ref().map(|x| &x[..]),
             &server_port_bytes,
-            secret,
+            &secret,
             clt_v6_opt.as_ref(),
             srv_v6_opt.as_ref(),
         );
@@ -327,7 +431,7 @@ impl MePool {
                 prekey_sha256_client = %hex_dump(&sha256(&prekey_client)),
                 prekey_sha256_server = %hex_dump(&sha256(&prekey_server)),
                 hs_plain = %hex_dump(&hs_frame),
-                proxy_secret_sha256 = %hex_dump(&sha256(secret)),
+                proxy_secret_sha256 = %hex_dump(&sha256(&secret)),
                 "ME diag: derived keys and handshake plaintext"
             );
         }

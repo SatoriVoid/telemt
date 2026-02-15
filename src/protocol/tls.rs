@@ -8,6 +8,8 @@ use crate::crypto::{sha256_hmac, SecureRandom};
 use crate::error::{ProxyError, Result};
 use super::constants::*;
 use std::time::{SystemTime, UNIX_EPOCH};
+use num_bigint::BigUint;
+use num_traits::One;
 
 // ============= Public Constants =============
 
@@ -311,13 +313,27 @@ pub fn validate_tls_handshake(
     None
 }
 
+fn curve25519_prime() -> BigUint {
+    (BigUint::one() << 255) - BigUint::from(19u32)
+}
+
 /// Generate a fake X25519 public key for TLS
 ///
-/// This generates random bytes that look like a valid X25519 public key.
-/// Since we're not doing real TLS, the actual cryptographic properties don't matter.
+/// Produces a quadratic residue mod p = 2^255 - 19 by computing n² mod p,
+/// which matches Python/C behavior and avoids DPI fingerprinting.
 pub fn gen_fake_x25519_key(rng: &SecureRandom) -> [u8; 32] {
-    let bytes = rng.bytes(32);
-    bytes.try_into().unwrap()
+    let mut n_bytes = [0u8; 32];
+    n_bytes.copy_from_slice(&rng.bytes(32));
+
+    let n = BigUint::from_bytes_le(&n_bytes);
+    let p = curve25519_prime();
+    let pk = (&n * &n) % &p;
+
+    let mut out = pk.to_bytes_le();
+    out.resize(32, 0);
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&out[..32]);
+    result
 }
 
 /// Build TLS ServerHello response
@@ -497,6 +513,17 @@ mod tests {
         assert_eq!(key1.len(), 32);
         assert_eq!(key2.len(), 32);
         assert_ne!(key1, key2); // Should be random
+    }
+
+    #[test]
+    fn test_fake_x25519_key_is_quadratic_residue() {
+        let rng = SecureRandom::new();
+        let key = gen_fake_x25519_key(&rng);
+        let p = curve25519_prime();
+        let k_num = BigUint::from_bytes_le(&key);
+        let exponent = (&p - BigUint::one()) >> 1;
+        let legendre = k_num.modpow(&exponent, &p);
+        assert_eq!(legendre, BigUint::one());
     }
     
     #[test]

@@ -4,9 +4,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{RwLock, mpsc};
 
 use super::MeResponse;
+use super::codec::RpcWriter;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct ConnRegistry {
     map: RwLock<HashMap<u64, mpsc::Sender<MeResponse>>>,
+    writers: RwLock<HashMap<u64, Arc<Mutex<RpcWriter>>>>,
     next_id: AtomicU64,
 }
 
@@ -16,6 +20,7 @@ impl ConnRegistry {
         let start = rand::random::<u64>() | 1;
         Self {
             map: RwLock::new(HashMap::new()),
+            writers: RwLock::new(HashMap::new()),
             next_id: AtomicU64::new(start),
         }
     }
@@ -29,6 +34,7 @@ impl ConnRegistry {
 
     pub async fn unregister(&self, id: u64) {
         self.map.write().await.remove(&id);
+        self.writers.write().await.remove(&id);
     }
 
     pub async fn route(&self, id: u64, resp: MeResponse) -> bool {
@@ -38,5 +44,15 @@ impl ConnRegistry {
         } else {
             false
         }
+    }
+
+    pub async fn set_writer(&self, id: u64, w: Arc<Mutex<RpcWriter>>) {
+        let mut guard = self.writers.write().await;
+        guard.entry(id).or_insert_with(|| w);
+    }
+
+    pub async fn get_writer(&self, id: u64) -> Option<Arc<Mutex<RpcWriter>>> {
+        let guard = self.writers.read().await;
+        guard.get(&id).cloned()
     }
 }

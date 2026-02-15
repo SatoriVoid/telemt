@@ -381,9 +381,14 @@ mod tests {
         // Add a buffer to pool
         pool.preallocate(1);
         
-        // Now try_get should succeed
-        assert!(pool.try_get().is_some());
+        // Now try_get should succeed once while the buffer is held
+        let buf = pool.try_get();
+        assert!(buf.is_some());
+        // While buffer is held, pool is empty
         assert!(pool.try_get().is_none());
+        // Drop buffer -> returns to pool, should be obtainable again
+        drop(buf);
+        assert!(pool.try_get().is_some());
     }
     
     #[test]

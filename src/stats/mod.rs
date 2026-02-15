@@ -212,28 +212,41 @@ impl ReplayChecker {
         (hasher.finish() as usize) & self.shard_mask
     }
 
-    fn check(&self, data: &[u8]) -> bool {
+    fn check_and_add_internal(&self, data: &[u8]) -> bool {
         self.checks.fetch_add(1, Ordering::Relaxed);
         let idx = self.get_shard_idx(data);
         let mut shard = self.shards[idx].lock();
-        let found = shard.check(data, Instant::now(), self.window);
+        let now = Instant::now();
+        let found = shard.check(data, now, self.window);
         if found {
             self.hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            shard.add(data, now, self.window);
+            self.additions.fetch_add(1, Ordering::Relaxed);
         }
         found
     }
 
-    fn add(&self, data: &[u8]) {
+    fn add_only(&self, data: &[u8]) {
         self.additions.fetch_add(1, Ordering::Relaxed);
         let idx = self.get_shard_idx(data);
         let mut shard = self.shards[idx].lock();
         shard.add(data, Instant::now(), self.window);
     }
 
-    pub fn check_handshake(&self, data: &[u8]) -> bool { self.check(data) }
-    pub fn add_handshake(&self, data: &[u8]) { self.add(data) }
-    pub fn check_tls_digest(&self, data: &[u8]) -> bool { self.check(data) }
-    pub fn add_tls_digest(&self, data: &[u8]) { self.add(data) }
+    pub fn check_and_add_handshake(&self, data: &[u8]) -> bool {
+        self.check_and_add_internal(data)
+    }
+
+    pub fn check_and_add_tls_digest(&self, data: &[u8]) -> bool {
+        self.check_and_add_internal(data)
+    }
+
+    // Compatibility helpers (non-atomic split operations) — prefer check_and_add_*.
+    pub fn check_handshake(&self, data: &[u8]) -> bool { self.check_and_add_handshake(data) }
+    pub fn add_handshake(&self, data: &[u8]) { self.add_only(data) }
+    pub fn check_tls_digest(&self, data: &[u8]) -> bool { self.check_and_add_tls_digest(data) }
+    pub fn add_tls_digest(&self, data: &[u8]) { self.add_only(data) }
     
     pub fn stats(&self) -> ReplayStats {
         let mut total_entries = 0;
@@ -326,10 +339,9 @@ mod tests {
     #[test]
     fn test_replay_checker_basic() {
         let checker = ReplayChecker::new(100, Duration::from_secs(60));
-        assert!(!checker.check_handshake(b"test1"));
-        checker.add_handshake(b"test1");
-        assert!(checker.check_handshake(b"test1"));
-        assert!(!checker.check_handshake(b"test2"));
+        assert!(!checker.check_handshake(b"test1")); // first time, inserts
+        assert!(checker.check_handshake(b"test1"));  // duplicate
+        assert!(!checker.check_handshake(b"test2")); // new key inserts
     }
     
     #[test]
@@ -343,7 +355,7 @@ mod tests {
     #[test]
     fn test_replay_checker_expiration() {
         let checker = ReplayChecker::new(100, Duration::from_millis(50));
-        checker.add_handshake(b"expire");
+        assert!(!checker.check_handshake(b"expire"));
         assert!(checker.check_handshake(b"expire"));
         std::thread::sleep(Duration::from_millis(100));
         assert!(!checker.check_handshake(b"expire"));
@@ -352,24 +364,24 @@ mod tests {
     #[test]
     fn test_replay_checker_stats() {
         let checker = ReplayChecker::new(100, Duration::from_secs(60));
-        checker.add_handshake(b"k1");
-        checker.add_handshake(b"k2");
-        checker.check_handshake(b"k1");
-        checker.check_handshake(b"k3");
+        assert!(!checker.check_handshake(b"k1"));
+        assert!(!checker.check_handshake(b"k2"));
+        assert!(checker.check_handshake(b"k1"));
+        assert!(!checker.check_handshake(b"k3"));
         let stats = checker.stats();
-        assert_eq!(stats.total_additions, 2);
-        assert_eq!(stats.total_checks, 2);
+        assert_eq!(stats.total_additions, 3);
+        assert_eq!(stats.total_checks, 4);
         assert_eq!(stats.total_hits, 1);
     }
     
     #[test]
     fn test_replay_checker_many_keys() {
-        let checker = ReplayChecker::new(1000, Duration::from_secs(60));
+        let checker = ReplayChecker::new(10_000, Duration::from_secs(60));
         for i in 0..500u32 {
-            checker.add(&i.to_le_bytes());
+            checker.add_only(&i.to_le_bytes());
         }
         for i in 0..500u32 {
-            assert!(checker.check(&i.to_le_bytes()));
+            assert!(checker.check_handshake(&i.to_le_bytes()));
         }
         assert_eq!(checker.stats().total_entries, 500);
     }

@@ -7,7 +7,7 @@ show_link = ["hello"]
 prefer_ipv6 = true
 fast_mode = true
 use_middle_proxy = true
-ad_tag = "00000000000000000000000000000000"
+#ad_tag = "00000000000000000000000000000000"
 
 # Log level: debug | verbose | normal | silent
 # Can be overridden with --silent or --log-level CLI flags
@@ -81,6 +81,3 @@ weight = 10
 # address = "127.0.0.1:1080"
 # enabled = false
 # weight = 1
-
-[dc_overrides]
-"203" = "91.105.192.100:443"

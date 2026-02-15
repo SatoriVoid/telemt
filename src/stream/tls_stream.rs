@@ -32,7 +32,7 @@
 //! and uploads from iOS will break (media/file sending), while small traffic
 //! may still work.
 
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{Bytes, BytesMut};
 use std::io::{self, Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -51,9 +51,10 @@ use super::state::{StreamState, HeaderBuffer, YieldBuffer, WriteBuffer};
 /// TLS record header size (type + version + length)
 const TLS_HEADER_SIZE: usize = 5;
 
-/// Maximum TLS fragment size per spec (plaintext fragment).
-/// We use this for *outgoing* chunking, because we build plain ApplicationData records.
-const MAX_TLS_PAYLOAD: usize = 16384;
+/// Maximum TLS fragment size we emit for Application Data.
+/// Real TLS 1.3 ciphertexts often add ~16-24 bytes AEAD overhead, so to mimic
+/// on-the-wire record sizes we allow up to 16384 + 24 bytes of plaintext.
+const MAX_TLS_PAYLOAD: usize = 16384 + 24;
 
 /// Maximum pending write buffer for one record remainder.
 /// Note: we never queue unlimited amount of data here; state holds at most one record.
@@ -918,10 +919,8 @@ mod tests {
         let reader = ChunkedReader::new(&record, 100);
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf = vec![0u8; payload.len()];
-        tls_reader.read_exact(&mut buf).await.unwrap();
-        
-        assert_eq!(&buf, payload);
+        let buf = tls_reader.read_exact(payload.len()).await.unwrap();
+        assert_eq!(&buf[..], payload);
     }
     
     #[tokio::test]
@@ -935,13 +934,11 @@ mod tests {
         let reader = ChunkedReader::new(&data, 100);
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf1 = vec![0u8; payload1.len()];
-        tls_reader.read_exact(&mut buf1).await.unwrap();
-        assert_eq!(&buf1, payload1);
+        let buf1 = tls_reader.read_exact(payload1.len()).await.unwrap();
+        assert_eq!(&buf1[..], payload1);
         
-        let mut buf2 = vec![0u8; payload2.len()];
-        tls_reader.read_exact(&mut buf2).await.unwrap();
-        assert_eq!(&buf2, payload2);
+        let buf2 = tls_reader.read_exact(payload2.len()).await.unwrap();
+        assert_eq!(&buf2[..], payload2);
     }
     
     #[tokio::test]
@@ -953,10 +950,9 @@ mod tests {
         let reader = ChunkedReader::new(&record, 1); // 1 byte at a time!
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf = vec![0u8; payload.len()];
-        tls_reader.read_exact(&mut buf).await.unwrap();
+        let buf = tls_reader.read_exact(payload.len()).await.unwrap();
         
-        assert_eq!(&buf, payload);
+        assert_eq!(&buf[..], payload);
     }
     
     #[tokio::test]
@@ -967,10 +963,9 @@ mod tests {
         let reader = ChunkedReader::new(&record, 7); // Awkward chunk size
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf = vec![0u8; payload.len()];
-        tls_reader.read_exact(&mut buf).await.unwrap();
+        let buf = tls_reader.read_exact(payload.len()).await.unwrap();
         
-        assert_eq!(&buf, payload);
+        assert_eq!(&buf[..], payload);
     }
     
     #[tokio::test]
@@ -983,10 +978,9 @@ mod tests {
         let reader = ChunkedReader::new(&data, 100);
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf = vec![0u8; payload.len()];
-        tls_reader.read_exact(&mut buf).await.unwrap();
+        let buf = tls_reader.read_exact(payload.len()).await.unwrap();
         
-        assert_eq!(&buf, payload);
+        assert_eq!(&buf[..], payload);
     }
     
     #[tokio::test]
@@ -1000,10 +994,9 @@ mod tests {
         let reader = ChunkedReader::new(&data, 3); // Small chunks
         let mut tls_reader = FakeTlsReader::new(reader);
         
-        let mut buf = vec![0u8; payload.len()];
-        tls_reader.read_exact(&mut buf).await.unwrap();
+        let buf = tls_reader.read_exact(payload.len()).await.unwrap();
         
-        assert_eq!(&buf, payload);
+        assert_eq!(&buf[..], payload);
     }
     
     #[tokio::test]
