@@ -384,9 +384,9 @@ match crate::transport::middle_proxy::fetch_proxy_secret(proxy_secret_path).awai
     };
 
     if me_pool.is_some() {
-        info!("Transport: Middle Proxy (supports all DCs including CDN)");
+        info!("Transport: Middle-End Proxy - all DC-over-RPC");
     } else {
-        info!("Transport: Direct TCP (standard DCs only)");
+        info!("Transport: Direct DC - TCP - standard DC-over-TCP");
     }
 
     // Middle-End ping before DC connectivity
@@ -472,17 +472,17 @@ match crate::transport::middle_proxy::fetch_proxy_secret(proxy_secret_path).awai
 		
 		if upstream_result.both_available {
 			if prefer_ipv6 {
-				info!("  IPv6 in use and IPv4 is fallback");
+				info!("  IPv6 in use / IPv4 is fallback");
 			} else {
-				info!("  IPv4 in use and IPv6 is fallback");
+				info!("  IPv4 in use / IPv6 is fallback");
 			}
 		} else {
 			if v6_works && !v4_works {
-				info!("  IPv6 only (IPv4 unavailable)");
+				info!("  IPv6 only / IPv4 unavailable)");
 			} else if v4_works && !v6_works {
-				info!("  IPv4 only (IPv6 unavailable)");
+				info!("  IPv4 only / IPv6 unavailable)");
 			} else if !v6_works && !v4_works {
-				info!("  No connectivity!");
+				info!("  No DC connectivity");
 			}
 		}
 
@@ -495,11 +495,11 @@ match crate::transport::middle_proxy::fetch_proxy_secret(proxy_secret_path).awai
 				let addr_str = format!("{}:{}", dc.dc_addr.ip(), dc.dc_addr.port());
 				match &dc.rtt_ms {
 					Some(rtt) => {
-						info!("    DC{} [IPv6] {}:\t\t{:.0} ms", dc.dc_idx, addr_str, rtt);
+						info!("    DC{} [IPv6] {} - {:.0} ms", dc.dc_idx, addr_str, rtt);
 					}
 					None => {
 						let err = dc.error.as_deref().unwrap_or("fail");
-						info!("    DC{} [IPv6] {}:\t\tFAIL ({})", dc.dc_idx, addr_str, err);
+						info!("    DC{} [IPv6] {} - FAIL ({})", dc.dc_idx, addr_str, err);
 					}
 				}
 			}
@@ -514,7 +514,7 @@ match crate::transport::middle_proxy::fetch_proxy_secret(proxy_secret_path).awai
 				match &dc.rtt_ms {
 					Some(rtt) => {
 						info!(
-							"    DC{} [IPv4] {}:\t\t\t\t{:.0} ms",
+							"    DC{} [IPv4] {}\t\t\t\t{:.0} ms",
 							dc.dc_idx, addr_str, rtt
 						);
 					}
