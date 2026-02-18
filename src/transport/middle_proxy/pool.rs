@@ -50,6 +50,8 @@ pub struct MePool {
     pub(super) detected_ipv6: Option<Ipv6Addr>,
     pub(super) nat_probe_attempts: std::sync::atomic::AtomicU8,
     pub(super) nat_probe_disabled: std::sync::atomic::AtomicBool,
+    pub(super) me_one_retry: u8,
+    pub(super) me_one_timeout: Duration,
     pub(super) proxy_map_v4: Arc<RwLock<HashMap<i32, Vec<(IpAddr, u16)>>>>,
     pub(super) proxy_map_v6: Arc<RwLock<HashMap<i32, Vec<(IpAddr, u16)>>>>,
     pub(super) default_dc: AtomicI32,
@@ -74,6 +76,8 @@ impl MePool {
         nat_probe: bool,
         nat_stun: Option<String>,
         detected_ipv6: Option<Ipv6Addr>,
+        me_one_retry: u8,
+        me_one_timeout_ms: u64,
         proxy_map_v4: HashMap<i32, Vec<(IpAddr, u16)>>,
         proxy_map_v6: HashMap<i32, Vec<(IpAddr, u16)>>,
         default_dc: Option<i32>,
@@ -95,6 +99,8 @@ impl MePool {
             detected_ipv6,
             nat_probe_attempts: std::sync::atomic::AtomicU8::new(0),
             nat_probe_disabled: std::sync::atomic::AtomicBool::new(false),
+            me_one_retry,
+            me_one_timeout: Duration::from_millis(me_one_timeout_ms),
             pool_size: 2,
             proxy_map_v4: Arc::new(RwLock::new(proxy_map_v4)),
             proxy_map_v6: Arc::new(RwLock::new(proxy_map_v6)),
@@ -251,6 +257,7 @@ impl MePool {
 
             // Ensure at least one connection per DC; run DCs in parallel.
             let mut join = tokio::task::JoinSet::new();
+            let mut dc_failures = 0usize;
             for (dc, addrs) in dc_addrs.iter().cloned() {
                 if addrs.is_empty() {
                     continue;
@@ -258,10 +265,17 @@ impl MePool {
                 let pool = Arc::clone(self);
                 let rng_clone = Arc::clone(rng);
                 join.spawn(async move {
-                    pool.connect_primary_for_dc(dc, addrs, rng_clone).await;
+                    pool.connect_primary_for_dc(dc, addrs, rng_clone).await
                 });
             }
-            while let Some(_res) = join.join_next().await {}
+            while let Some(res) = join.join_next().await {
+                if let Ok(false) = res {
+                    dc_failures += 1;
+                }
+            }
+            if dc_failures > 2 {
+                return Err(ProxyError::Proxy("Too many ME DC init failures, falling back to direct".into()));
+            }
 
             // Additional connections up to pool_size total (round-robin across DCs)
             for (dc, addrs) in dc_addrs.iter() {
@@ -397,9 +411,9 @@ impl MePool {
         dc: i32,
         mut addrs: Vec<(IpAddr, u16)>,
         rng: Arc<SecureRandom>,
-    ) {
+    ) -> bool {
         if addrs.is_empty() {
-            return;
+            return false;
         }
         addrs.shuffle(&mut rand::rng());
         for (ip, port) in addrs {
@@ -407,12 +421,13 @@ impl MePool {
             match self.connect_one(addr, rng.as_ref()).await {
                 Ok(()) => {
                     info!(%addr, dc = %dc, "ME connected");
-                    return;
+                    return true;
                 }
                 Err(e) => warn!(%addr, dc = %dc, error = %e, "ME connect failed, trying next"),
             }
         }
         warn!(dc = %dc, "All ME servers for DC failed at init");
+        false
     }
 
     pub(crate) async fn remove_writer_and_close_clients(&self, writer_id: u64) {

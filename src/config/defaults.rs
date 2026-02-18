@@ -46,6 +46,13 @@ pub(crate) fn default_keepalive() -> u64 {
 pub(crate) fn default_ack_timeout() -> u64 {
     300
 }
+pub(crate) fn default_me_one_retry() -> u8 {
+    3
+}
+
+pub(crate) fn default_me_one_timeout() -> u64 {
+    1500
+}
 
 pub(crate) fn default_listen_addr() -> String {
     "0.0.0.0".to_string()
