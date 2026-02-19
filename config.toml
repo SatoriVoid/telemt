@@ -2,13 +2,14 @@
 [general]
 fast_mode = true
 use_middle_proxy = true
-#ad_tag = "00000000000000000000000000000000"
+# ad_tag = "00000000000000000000000000000000"
 # Path to proxy-secret binary (auto-downloaded if missing).
 proxy_secret_path = "proxy-secret"
+# disable_colors = false  # Disable colored output in logs (useful for files/systemd)
 
 # === Middle Proxy (ME) ===
 # Public IP override for ME KDF when behind NAT; leave unset to auto-detect.
-#middle_proxy_nat_ip = "203.0.113.10"
+# middle_proxy_nat_ip = "203.0.113.10"
 # Enable STUN probing to discover public IP:port for ME.
 middle_proxy_nat_probe = true
 # Primary STUN server (host:port); defaults to Telegram STUN when empty.
@@ -74,7 +75,9 @@ ip = "::"
 
 # Users to show in the startup log (tg:// links)
 [general.links]
-show = ["hello"] # Users to show in the startup log (tg:// links)
+show = ["hello"]          # Only show links for user "hello"
+# show = ["alice", "bob"] # Only show links for alice and bob
+# show = "*"              # Show links for all users
 # public_host = "proxy.example.com"  # Host (IP or domain) for tg:// links
 # public_port = 443                  # Port for tg:// links (default: server.port)
 
